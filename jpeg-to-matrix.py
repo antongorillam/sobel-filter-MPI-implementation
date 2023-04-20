@@ -12,8 +12,8 @@ def main():
         img = Image.open(file).convert('L')
         img = np.array(img)
         
-        np.savetxt(f'images/mat_files/{os.path.basename(file)}.csv', img, delimiter=",")
-        np.save(f'images/mat_files/{os.path.basename(file)}', img)
+        # np.savetxt(f'images/mat_files/{os.path.basename(file)}.csv', img, delimiter=",")
+        # np.save(f'images/mat_files/{os.path.basename(file)}', img)
 
 if __name__ == "__main__":
     main()
