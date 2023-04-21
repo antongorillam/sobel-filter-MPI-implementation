@@ -7,6 +7,8 @@
 #include <string>
 #include <string.h>
 #include <vector>
+#include <cmath>
+
 /* Use MPI */
 #include <mpi.h>
 
@@ -15,6 +17,10 @@ using namespace std;
 
 #define BUFFERSIZE 16384
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define FILTER_HEIGHT 3
+#define FILTER_WIDTH 3
+
+
 
 /**
  * Reads a CSV file from the given path and returns its contents as a 2D vector of integers.
@@ -22,20 +28,20 @@ using namespace std;
  * @param path The path to the CSV file.
  * @return A 2D vector of integers representing the contents of the CSV file.
  */
-vector<vector<int>> getMatrix(string path) {
+vector<vector<double>> getMatrix(string path) {
     FILE* fp;
     fp = fopen(path.c_str(), "r");
     if (fp == NULL) {
         printf("Error opening file %s\n", path.c_str());
         exit(1);
     }
-    vector<vector<int>> data;
+    vector<vector<double>> data;
     char buffer[BUFFERSIZE];
     while (fgets(buffer, BUFFERSIZE, fp) != NULL) {
         char* field = strtok(buffer, ",");
-        vector<int> row;
+        vector<double> row;
         while (field != NULL) {
-            int intField = strtod(field, NULL);
+            double intField = strtod(field, NULL);
             row.push_back(intField);
             field = strtok(NULL, ",");
         }
@@ -51,16 +57,57 @@ vector<vector<int>> getMatrix(string path) {
  * @param mat The 2D vector of integers to print.
  * @return 1 if the function executed successfully.
  */
-int printMatrix(vector<vector<int>> mat) {
+int printMatrix(vector<vector<double>> mat) {
     for (int i = 0; i < mat.size(); i++)
     { // iterate over the rows of the 2D vector
-        for (int j = 0; j < mat[i].size(); j++) // iterate over the columns of each row 
-        {
-            std::cout << mat[i][j] << " "; // output the element at row i, column j
+        for (int j = 0; j < mat[i].size(); j++) { // iterate over the columns of each row 
+            cout << mat[i][j] << " "; // output the element at row i, column j
         }
-        std::cout << std::endl; // output a newline character after each row
+        cout << endl; // output a newline character after each row
     }
     return 1;
+}
+
+double sobelHelper(vector<vector<double>> filter, vector<vector<double>> matrix, int start_row, int start_col) {
+    double sum = 0;
+    
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            sum += filter[i][j] * matrix[i + start_row][j + start_col];
+            // cout << matrix[i + start_row][j + start_col] << " ";
+        }
+        // cout << endl;
+    }
+    // cout << "sum: " << sum << endl;
+    return sum;
+    
+}
+
+vector<vector<double>> sobel(vector<vector<double>> mat) {
+  
+    vector<vector<double>> Gx = {
+        {-1, 0, 1},
+        {-2, 0, 2},
+        {-1, 0, 1}
+    };
+    vector<vector<double>> Gy = {
+        {-1, -2, -1},
+        { 0,  0,  0},
+        { 1,  2,  1}
+    };
+    int rows = mat.size(); int cols = mat[0].size(); 
+    vector<vector<double>> mag(rows, vector<double> (cols, 0));
+    printf("heigh: %lu, width: %lu\n", mag.size(), mag[0].size());
+
+    for (int i = 0; i < rows - 2; i++) {
+        for (int j = 0; j < cols - 2; j++) {
+            double s1 = sobelHelper(Gx, mat, i, j);
+            double s2 = sobelHelper(Gy, mat, i, j);
+   
+            mag[i + 1][j + 1] = sqrt(pow(s1, 2) + pow(s2, 2));
+        }   
+    }
+    return mag;
 }
 
 int main(int argc, char* argv[])
@@ -78,9 +125,23 @@ int main(int argc, char* argv[])
 
     printf("p: %d\n", p);
 
-    vector<vector<int>> mat = getMatrix("images/mat_files/8049.jpg.csv");
-    printf("heigh: %lu, width: %lu\n", mat.size(), mat[0].size());
-    // printMatrix(mat);
+    vector<vector<double>> mat = getMatrix("images/mat_files/8049.jpg.csv");
+    // cout << "matrix datatype: " << typeid(mat).name() << endl;
+
+    vector<vector<double>> mag = sobel(mat);
+    // printMatrix(mag);
+
+    ofstream outfile("matrix.csv");
+    for (int i = 0; i < mag.size(); i++) {
+        for (int j = 0; j < mag[i].size(); j++) {
+            outfile << mag[i][j];
+            if (j != mag[i].size() - 1) {
+                outfile << ",";
+            }
+        }
+        outfile << std::endl;
+    }
+    outfile.close();
 
     MPI_Finalize(); exit(0); return 0;
     // if (N < P) {
