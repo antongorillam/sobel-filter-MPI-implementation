@@ -11,7 +11,6 @@ def main():
     for file in files:
         img = Image.open(file).convert('L')
         img = np.array(img)
-        
         # np.savetxt(f'images/mat_files/{os.path.basename(file)}.csv', img, delimiter=",")
         # np.save(f'images/mat_files/{os.path.basename(file)}', img)
 

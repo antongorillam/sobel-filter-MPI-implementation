@@ -8,6 +8,8 @@
 #include <string.h>
 #include <vector>
 #include <cmath>
+#include <time.h>
+#include <chrono>
 
 /* Use MPI */
 #include <mpi.h>
@@ -20,6 +22,17 @@ using namespace std;
 #define FILTER_HEIGHT 3
 #define FILTER_WIDTH 3
 
+const vector<vector<double>> Gx = {
+        {-1, 0, 1},
+        {-2, 0, 2},
+        {-1, 0, 1}
+    };
+    
+const vector<vector<double>> Gy = {
+        {-1, -2, -1},
+        { 0,  0,  0},
+        { 1,  2,  1}
+    };
 
 
 /**
@@ -70,31 +83,17 @@ int printMatrix(vector<vector<double>> mat) {
 
 double sobelHelper(vector<vector<double>> filter, vector<vector<double>> matrix, int start_row, int start_col) {
     double sum = 0;
-    
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
             sum += filter[i][j] * matrix[i + start_row][j + start_col];
-            // cout << matrix[i + start_row][j + start_col] << " ";
         }
-        // cout << endl;
     }
-    // cout << "sum: " << sum << endl;
     return sum;
     
 }
 
 vector<vector<double>> sobel(vector<vector<double>> mat) {
   
-    vector<vector<double>> Gx = {
-        {-1, 0, 1},
-        {-2, 0, 2},
-        {-1, 0, 1}
-    };
-    vector<vector<double>> Gy = {
-        {-1, -2, -1},
-        { 0,  0,  0},
-        { 1,  2,  1}
-    };
     int rows = mat.size(); int cols = mat[0].size(); 
     vector<vector<double>> mag(rows, vector<double> (cols, 0));
     printf("heigh: %lu, width: %lu\n", mag.size(), mag[0].size());
@@ -103,47 +102,159 @@ vector<vector<double>> sobel(vector<vector<double>> mat) {
         for (int j = 0; j < cols - 2; j++) {
             double s1 = sobelHelper(Gx, mat, i, j);
             double s2 = sobelHelper(Gy, mat, i, j);
-   
             mag[i + 1][j + 1] = sqrt(pow(s1, 2) + pow(s2, 2));
         }   
     }
     return mag;
 }
 
+/**
+ * Reshapes a 1D vector into a 2D vector with the specified number of rows and columns.
+ *
+ * @param flat_vector The 1D vector to reshape.
+ * @param rows The number of rows in the reshaped 2D vector.
+ * @param cols The number of columns in the reshaped 2D vector.
+ * @return The reshaped 2D vector.
+ * @throws std::runtime_error if the number of elements in the 1D vector is not equal to rows * cols.
+ */
+vector<vector<double>> reshape(vector<double> flat_vector, int rows, int cols) {
+
+    if (rows * cols != flat_vector.size()) {
+        printf("Invalid reshape!");
+        MPI_Finalize(); exit(0); return 0;
+    }
+    
+    vector<vector<double>> vector_2d(rows, vector<double>(cols));
+    int k = 0;
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            vector_2d[i][j] = flat_vector[k];
+            k++;
+        }
+    }
+    return vector_2d;
+}
+
 int main(int argc, char* argv[])
 {
     /* local variable */
     /* Initialize MPI */
-
-    int p, P, tag, n;
+    clock_t startTime;
+    int p, totalProcs, tag, n;
     tag = 42;
     MPI_Status status;
 
     MPI_Init(&argc, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &P);
+    MPI_Comm_size(MPI_COMM_WORLD, &totalProcs);
     MPI_Comm_rank(MPI_COMM_WORLD, &p);
+    
+    int matrix_size[2];
+    vector<double> flatten_list;
+    // Master processor reads v
+    if (p==0) {
+        clock_t startTime = clock(); // Master processor keeps the time
 
-    printf("p: %d\n", p);
+        vector<vector<double>> mat = getMatrix("images/mat_files/100075.jpg.csv");
 
-    vector<vector<double>> mat = getMatrix("images/mat_files/8049.jpg.csv");
-    // cout << "matrix datatype: " << typeid(mat).name() << endl;
+        int N = (int) mat.size(); int M = (int) mat[0].size();
+        matrix_size[0] = N;
+        matrix_size[1] = M;
 
-    vector<vector<double>> mag = sobel(mat);
-    // printMatrix(mag);
-
-    ofstream outfile("matrix.csv");
-    for (int i = 0; i < mag.size(); i++) {
-        for (int j = 0; j < mag[i].size(); j++) {
-            outfile << mag[i][j];
-            if (j != mag[i].size() - 1) {
-                outfile << ",";
+        // Flatten the vector to a array object.
+        flatten_list.resize(M * N);
+        for (int i = 0; i < N; i++) {
+            for (int j = 0; j < M; j++) {
+                flatten_list[i * M + j] = mat[i][j];
             }
         }
-        outfile << std::endl;
     }
-    outfile.close();
+    MPI_Bcast(&matrix_size, 2, MPI_INT, 0, MPI_COMM_WORLD);
+    int N = matrix_size[0]; int M = matrix_size[1];
+
+    vector<int> sendcnts(totalProcs);
+    vector<int> displs(totalProcs);
+    displs[0] = 0; 
+    int W = M;
+    int H = (int) N/totalProcs;
+    int res = N - totalProcs * H;
+
+
+    for (int i = 0; i < totalProcs - 1; i++) {
+        sendcnts[i] = W * (i < res ? H + 1 : H);
+        displs[i+1] = displs[i] + sendcnts[i];
+
+    }
+    sendcnts[totalProcs - 1] = W * H;
+
+    if (p==0) {
+        // cout << "p:" << p << " hej" << endl;
+        for (int i = 0; i < sendcnts.size(); i++) {
+            cout << sendcnts[i] << ", ";
+        }
+        cout << endl;
+        for (int i = 0; i < sendcnts.size(); i++) {
+            cout << displs[i] << ", ";
+        }            
+        cout << endl;
+    }
+    vector<double> local_flattened_list(sendcnts[p]);
+
+
+    // Do the scatter stuff now
+    MPI_Scatterv(flatten_list.data(), sendcnts.data(), displs.data(), MPI_DOUBLE, 
+                local_flattened_list.data(), sendcnts[p], MPI_DOUBLE, 0, MPI_COMM_WORLD );
+
+    free(flatten_list);
+    H = H + (p < res ? 1 : 0);
+    cout << "p: " << p << ", H: " << H << ", W: " << W << " flattened vec: " <<  local_flattened_list.size() << endl;
+    // cout << "p" << p << ": " << local_flattened_list[0] << ", " << local_flattened_list[1] << endl;
+    vector<vector<double>> local_vector = reshape(local_flattened_list, H, W);
+    if (p==0){
+        // printMatrix(local_vector);
+        cout << "local_vector.size: " << local_vector.size() << ", ";
+        cout << "local_vector[0].size: " << local_vector[0].size() << endl; 
+    }
+    
+
+
+
+    // cout << "p: " << p << ", p_i: " << p_i << ", p_j: " << p_j <<  endl;
+
+    // cout << "p: " << p << ", p_i: " << p_i << ", p_j: " << p_j <<  endl;
+
+
+    // cout << "H_res: " << H_res << endl;    
+
+    // double flatten_list[(int) matrix_size[0] * matrix_size[1]];
+    
+
+    // Send the size of the matrix to all the v
+
+    // MPI_Scatter(v.data(), local_n, MPI_INT, local_v.data(), local_n, MPI_INT, 0, MPI_COMM_WORLD);
+    
+
+
+    if (p==0) {
+        clock_t secElapsed = (clock() - startTime) / 1000000;
+        // ofstream outfile("matrix.csv");
+        // for (int i = 0; i < mag.size(); i++) {
+        //     for (int j = 0; j < mag[i].size(); j++) {
+        //         outfile << mag[i][j];
+        //         if (j != mag[i].size() - 1) {
+        //             outfile << ",";
+        //         }
+        //     }
+        //     outfile << std::endl;
+        // }
+        // outfile.close();
+        cout << "Time elapsed: " << secElapsed << " seconds" << endl;
+    }
+    
+
+
 
     MPI_Finalize(); exit(0); return 0;
+
     // if (N < P) {
     //     fprintf(stdout, "Too few discretization points...\n");
     //     exit(1);
