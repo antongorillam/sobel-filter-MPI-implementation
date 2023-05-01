@@ -22,6 +22,10 @@ using namespace std;
 #define FILTER_HEIGHT 3
 #define FILTER_WIDTH 3
 
+#define ODD(n) (n % 2 == 0 ? false : true)
+#define EVEN(n) (n % 2 == 0 ? true : false)
+
+
 const vector<vector<double>> Gx = {
         {-1, 0, 1},
         {-2, 0, 2},
@@ -92,6 +96,22 @@ double sobelHelper(vector<vector<double>> filter, vector<vector<double>> matrix,
     
 }
 
+double sobelTemp(vector<vector<double>> matrix) {
+    if (matrix.size() != 3 || matrix[0].size() != 3) {
+        printf("Error matrix has to be 3X3.");
+        MPI_Finalize(); exit(0); return 0;
+    }
+    double sx, sy, s;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            sx += Gx[i][j] * matrix[i][j];
+            sy += Gy[i][j] * matrix[i][j];
+        }
+    }
+    s = sqrt(pow(sx, 2) + pow(sy, 2));
+    return s;
+}
+
 vector<vector<double>> sobel(vector<vector<double>> mat) {
   
     int rows = mat.size(); int cols = mat[0].size(); 
@@ -121,7 +141,7 @@ vector<vector<double>> reshape(vector<double> flat_vector, int rows, int cols) {
 
     if (rows * cols != flat_vector.size()) {
         printf("Invalid reshape!");
-        MPI_Finalize(); exit(0); return 0;
+        MPI_Finalize(); exit(0); return vector<vector<double>>();
     }
     
     vector<vector<double>> vector_2d(rows, vector<double>(cols));
@@ -138,25 +158,27 @@ vector<vector<double>> reshape(vector<double> flat_vector, int rows, int cols) {
 int main(int argc, char* argv[])
 {
     /* local variable */
-    /* Initialize MPI */
     clock_t startTime;
-    int p, totalProcs, tag, n;
+    int p, P, tag, n;
     tag = 42;
     MPI_Status status;
 
+    /* Initialize MPI */
     MPI_Init(&argc, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &totalProcs);
+    MPI_Comm_size(MPI_COMM_WORLD, &P);
     MPI_Comm_rank(MPI_COMM_WORLD, &p);
-    
+        
     int matrix_size[2];
     vector<double> flatten_list;
-    // Master processor reads v
+
+    // Master processor reads image
     if (p==0) {
         clock_t startTime = clock(); // Master processor keeps the time
 
         vector<vector<double>> mat = getMatrix("images/mat_files/100075.jpg.csv");
 
-        int N = (int) mat.size(); int M = (int) mat[0].size();
+        int N = (int) mat.size(); 
+        int M = (int) mat[0].size();
         matrix_size[0] = N;
         matrix_size[1] = M;
 
@@ -171,20 +193,20 @@ int main(int argc, char* argv[])
     MPI_Bcast(&matrix_size, 2, MPI_INT, 0, MPI_COMM_WORLD);
     int N = matrix_size[0]; int M = matrix_size[1];
 
-    vector<int> sendcnts(totalProcs);
-    vector<int> displs(totalProcs);
+    vector<int> sendcnts(P);
+    vector<int> displs(P);
     displs[0] = 0; 
     int W = M;
-    int H = (int) N/totalProcs;
-    int res = N - totalProcs * H;
+    int H = (int) N/P;
+    int res = N - P * H;
 
 
-    for (int i = 0; i < totalProcs - 1; i++) {
+    for (int i = 0; i < P - 1; i++) {
         sendcnts[i] = W * (i < res ? H + 1 : H);
         displs[i+1] = displs[i] + sendcnts[i];
 
     }
-    sendcnts[totalProcs - 1] = W * H;
+    sendcnts[P - 1] = W * H;
 
     if (p==0) {
         // cout << "p:" << p << " hej" << endl;
@@ -202,40 +224,109 @@ int main(int argc, char* argv[])
 
     // Do the scatter stuff now
     MPI_Scatterv(flatten_list.data(), sendcnts.data(), displs.data(), MPI_DOUBLE, 
-                local_flattened_list.data(), sendcnts[p], MPI_DOUBLE, 0, MPI_COMM_WORLD );
+                local_flattened_list.data(), sendcnts[p], MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-    free(flatten_list);
+
+    flatten_list.clear();
+
     H = H + (p < res ? 1 : 0);
     cout << "p: " << p << ", H: " << H << ", W: " << W << " flattened vec: " <<  local_flattened_list.size() << endl;
     // cout << "p" << p << ": " << local_flattened_list[0] << ", " << local_flattened_list[1] << endl;
-    vector<vector<double>> local_vector = reshape(local_flattened_list, H, W);
+    vector<vector<double>> local_mat = reshape(local_flattened_list, H, W);
     if (p==0){
         // printMatrix(local_vector);
-        cout << "local_vector.size: " << local_vector.size() << ", ";
-        cout << "local_vector[0].size: " << local_vector[0].size() << endl; 
+        // cout << "local_vector.size: " << local_vector.size() << ", ";
+        // cout << "local_vector[0].size: " << local_vector[0].size() << endl; 
+    }
+
+    int W_mag = W - 2;
+    int H_mag = H + (p==0 || p==P-1 ? 1 : 0);
+    vector<vector<double>> mag(H_mag, vector<double> (W_mag - 2, 0)); 
+    vector<vector<double>> mat_temp(3 , vector<double> (3, 0)); // Create a 3x3 matrix with zeros  
+    int j, k;
+    // Sending downwards
+    for (int i = 0; i < W-2; i++) {         
+        // First iteration, send an receive 3 elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+        
+        // initialize the original temp_matrix
+        if (p!=0) {
+            for (j = 1; j < 3; j++) {
+                for (k = 0; k < 3; k++) {
+                    mat_temp[j][k] = local_mat[j-1][k+i];
+                }
+            }
+        }
+        // } else if (i!=0 && p!=0) {
+        //     for (j = 0; j < 3; j ++) {
+        //         for (k = 0; k < 2; k++) {
+        //             mat_temp[j][k] = mat_temp[j][k+1];
+        //         }
+        //     }
+        // }
+
+        if (i==0 && EVEN(p)) {
+            if (p != P-1)
+                MPI_Send(local_mat[H-1].data(), 3, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
+            
+            if (p != 0)
+                MPI_Recv(mat_temp[0].data(), 3, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status); // receiving from upper
+
+        } else if (i==0 && ODD(p)) {
+            if (p != 0)
+                MPI_Recv(mat_temp[0].data(), 3, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status); // receive from upper
+
+            if (p != P-1)
+                MPI_Send(local_mat[H-1].data(), 3, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
+        
+        } else if (i!=0 && EVEN(p)) {
+            // Shift the 1st row one step to the left
+            for (k = 0; k < 2; k++)
+                mat_temp[0][k] = mat_temp[0][k+1];
+            
+            if (p != P-1)
+                MPI_Send(local_mat[H-1].data() + 2 + i, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
+
+            if (p != 0)
+                MPI_Recv(mat_temp[0].data() + 2, 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status); // receiving from upper
+            
+        } else if (p!=0 && ODD(p)) {
+            // Shift the 1st row one step to the left
+            for (k = 0; k < 2; k++)
+                mat_temp[0][k] = mat_temp[0][k+1];
+                
+            if (p != 0)
+                MPI_Recv(mat_temp[0].data() + 2, 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status); // receive from upper
+ 
+            if (p != P-1)
+                MPI_Send(local_mat[H-1].data() + 2 + i, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
+
+        }
     }
     
-
-
-
-    // cout << "p: " << p << ", p_i: " << p_i << ", p_j: " << p_j <<  endl;
-
-    // cout << "p: " << p << ", p_i: " << p_i << ", p_j: " << p_j <<  endl;
-
-
-    // cout << "H_res: " << H_res << endl;    
-
-    // double flatten_list[(int) matrix_size[0] * matrix_size[1]];
     
-
-    // Send the size of the matrix to all the v
-
-    // MPI_Scatter(v.data(), local_n, MPI_INT, local_v.data(), local_n, MPI_INT, 0, MPI_COMM_WORLD);
+    if (p==7) {
+        printMatrix(mat_temp);
+    }
     
+    // if (p==0 || p==P-1) {
+    //     vector<vector<double>> mag(H - (p==0 || p==P-1 ? 1 : 0), vector<double> (W - 2, 0)); 
+    // } else {
+    //     vector<vector<double>> mag(H, vector<double> (W - 2, 0)); 
+    // }
 
+
+
+    // for (int i = 0; i < rows - 2; i++) {
+    //     for (int j = 0; j < cols - 2; j++) {
+    //         double s1 = sobelHelper(Gx, mat, i, j);
+    //         double s2 = sobelHelper(Gy, mat, i, j);
+    //         mag[i + 1][j + 1] = sqrt(pow(s1, 2) + pow(s2, 2));
+    //     }   
+    // }
+    
 
     if (p==0) {
-        clock_t secElapsed = (clock() - startTime) / 1000000;
+        clock_t secElapsed = (startTime - clock()) / 1000000;
         // ofstream outfile("matrix.csv");
         // for (int i = 0; i < mag.size(); i++) {
         //     for (int j = 0; j < mag[i].size(); j++) {
@@ -249,86 +340,6 @@ int main(int argc, char* argv[])
         // outfile.close();
         cout << "Time elapsed: " << secElapsed << " seconds" << endl;
     }
-    
-
-
-
-    MPI_Finalize(); exit(0); return 0;
-
-    // if (N < P) {
-    //     fprintf(stdout, "Too few discretization points...\n");
-    //     exit(1);
-    // }
-
-    // unew = (double *) malloc((int) L*sizeof(double));
-    // u = (double *) calloc(u_size, sizeof(double));
-
-    // /* Jacobi iteration */
-    // for (int step = 0; step < K; step++) {
-    //     if (p==0 && step % 1000 == 0) {
-    //         printf("At step: %d/%d\n", step, K);
-    //     }
-    //     /* RB communication of overlap */
-
-    //     if (p == 0) {
-    //         MPI_Send(&u[u_size-2], 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD);
-    //         MPI_Recv(&u[u_size-1], 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status);
-    //     } else if (p == P-1 && p % 2 == 0) { // last processor and even
-    //         MPI_Send(&u[1], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD);
-    //         MPI_Recv(&u[0], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status);
-    //     } else if (p == P-1 && p % 2 != 0) { // last processor and odd
-    //         MPI_Recv(&u[0], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status);
-    //         MPI_Send(&u[1], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD);                    
-    //     } else if (p % 2 == 0) { // Even: red
-    //         MPI_Send(&u[u_size-2], 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD);
-    //         MPI_Recv(&u[u_size-1], 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status);
-    //         MPI_Send(&u[1], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD);
-    //         MPI_Recv(&u[0], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status);
-    //     } else { // Odd: black
-    //         MPI_Recv(&u[0], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD, &status);
-    //         MPI_Send(&u[1], 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD);
-    //         MPI_Recv(&u[u_size-1], 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status);
-    //         MPI_Send(&u[u_size-2], 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD);
-    //     }
-
-    //     // /* local iteration step */
-    //     for (int i = 0; i < L; i++) {
-    //         n = p*L+MIN(p,R)+i;
-    //         unew[i] = (u[i]+u[i+2]-h*h*f((double) n * h))/(2.0-h*h*r((double) n * h));
-
-    //     }
-    //     for (int i = 0; i < L; i++) {
-    //         u[i+1] = unew[i]; 
-    //     }
-    // }
-
-    // FILE *fp;
-    // if (p==0){ // Master process
-    //     fp = fopen("hm2_test_res.csv", "w");
-    // 	for (int i = 0; i < L; i++) {
-    // 	    fprintf(fp, "%f, ", unew[i]);
-    //     }
-    //     fclose(fp);		
-    //     MPI_Send("hi", 2, MPI_CHAR, 1, tag, MPI_COMM_WORLD);
-    // } else {
-
-    //     char message[2]; // Nonesense message
-    //     MPI_Recv(message, 2, MPI_CHAR, p-1, tag, MPI_COMM_WORLD, &status);
-    //     fp = fopen("hm2_test_res.csv", "a");
-    //     for (int i = 0; i < L; i++) {
-    // 	    fprintf(fp, "%f, ", unew[i]);
-    //     }
-    //     // fprintf(fp, "\n");
-    //     if (p!=P-1) { // If it's not the last processor, keep sending the signals forward
-    //         MPI_Send(message, 2, MPI_CHAR, p+1, tag, MPI_COMM_WORLD);
-    //     }
-    //     fclose(fp);
-    // }
-
-
-    // free(u);
-    // free(unew);
-
     // printf("Process %d finished\n", p);
     // /* That's it */
     MPI_Finalize();
