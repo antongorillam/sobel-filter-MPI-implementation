@@ -10,7 +10,8 @@
 #include <cmath>
 #include <time.h>
 #include <chrono>
-
+#include <filesystem>
+#include <libgen.h>
 /* Use MPI */
 #include <mpi.h>
 
@@ -25,7 +26,6 @@ using namespace std;
 #define ODD(n) (n % 2 == 0 ? false : true)
 #define EVEN(n) (n % 2 == 0 ? true : false)
 
-
 const vector<vector<double>> Gx = {
         {-1, 0, 1},
         {-2, 0, 2},
@@ -37,7 +37,6 @@ const vector<vector<double>> Gy = {
         { 0,  0,  0},
         { 1,  2,  1}
     };
-
 
 /**
  * Reads a CSV file from the given path and returns its contents as a 2D vector of integers.
@@ -85,58 +84,101 @@ int printMatrix(vector<vector<double>> mat) {
     return 1;
 }
 
+/**
+ * @brief Print the elements of a vector of doubles.
+ *
+ * This function iterates through a given vector of doubles and prints each element followed by a space.
+ * After printing all elements, it outputs a newline character.
+ *
+ * @param vec The vector of doubles to be printed.
+ * @return 1 upon successful execution.
+ */
 int printVector(vector<double> vec) {
-    for (int i = 0; i < vec.size(); i++)
-    { // iterate over the rows of the 2D vector
-        cout << vec[i] << " "; // output the element at row i, column j
+    for (int i = 0; i < vec.size(); i++) {
+        // Output the element at index i
+        cout << vec[i] << " ";
     }
-        cout << endl; // output a newline character after each row
+
+    // Output a newline character after printing all elements
+    cout << endl;
+
     return 1;
 }
 
-double sobelTemp(vector<vector<double>> matrix) {
+/**
+ * Calculates the Sobel operator on a 3x3 matrix.
+ * 
+ * @param matrix The 3x3 input matrix.
+ * @return The Sobel operator value.
+ */
+double sobel3x3(vector<vector<double>> matrix) {
     if (matrix.size() != 3 || matrix[0].size() != 3) {
+        // Print an error message and exit the program if the matrix is not 3x3.
         printf("Error matrix has to be 3X3.");
         MPI_Finalize(); exit(0); return 0;
     }
     double sx, sy, s;
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
+            // Compute the Sobel operator values for each element in the matrix.
             sx += Gx[i][j] * matrix[i][j];
             sy += Gy[i][j] * matrix[i][j];
         }
     }
+    // Compute the magnitude of the Sobel operator.
     s = sqrt(pow(sx, 2) + pow(sy, 2));
     return s;
 }
 
+/**
+ * Applies the Sobel operator to a 3x3 neighborhood of the input image matrix.
+ * 
+ * @param filter: A 2D vector of doubles representing the Sobel operator filter.
+ * @param matrix: A 2D vector of doubles representing the input image.
+ * @param start_row: The row index of the top-left corner of the 3x3 neighborhood.
+ * @param start_col: The column index of the top-left corner of the 3x3 neighborhood.
+ * @return The dot product of the Sobel operator filter and the input image neighborhood.
+ */
 double sobelHelper(vector<vector<double>> filter, vector<vector<double>> matrix, int start_row, int start_col) {
+    // Initialize the sum to 0.
     double sum = 0;
+    // Compute the dot product between the Sobel operator filter and the input image neighborhood.
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
             sum += filter[i][j] * matrix[i + start_row][j + start_col];
         }
     }
-    return sum;
-    
+    // Return the dot product.
+    return sum;   
 }
 
-
+/**
+ * Applies the Sobel operator to the input image matrix.
+ * 
+ * @param mat: A 2D vector of doubles representing the input image.
+ * @return A 2D vector of doubles representing the magnitude of the gradient at each pixel.
+ */
 vector<vector<double>> sobel(vector<vector<double>> mat) {
-  
+    // Get the number of rows and columns in the input image.
     int rows = mat.size(); int cols = mat[0].size(); 
-    vector<vector<double>> mag(rows, vector<double> (cols - 2, 0));
-    printf("heigh: %lu, width: %lu\n", mag.size(), mag[0].size());
 
+    // Create a new matrix to store the magnitude of the gradient at each pixel.
+    vector<vector<double>> mag(rows, vector<double> (cols - 2, 0));
+
+    // For each pixel in the input image, apply the Sobel operator to compute the gradient magnitude.
     for (int i = 0; i < rows - 2; i++) {
         for (int j = 0; j < cols - 2; j++) {
+            // Compute the gradient in the x and y directions using the Sobel operator.
             double s1 = sobelHelper(Gx, mat, i, j);
             double s2 = sobelHelper(Gy, mat, i, j);
-            mag[i + 1][j] = sqrt(pow(s1, 2) + pow(s2, 2)); // j+1?
+            // Compute the magnitude of the gradient at the current pixel.
+            mag[i + 1][j] = sqrt(pow(s1, 2) + pow(s2, 2));
         }   
     }
+    // Return the matrix of gradient magnitudes.
     return mag;
 }
+
 
 /**
  * Reshapes a 1D vector into a 2D vector with the specified number of rows and columns.
@@ -168,8 +210,9 @@ vector<vector<double>> reshape(vector<double> flat_vector, int rows, int cols) {
 int main(int argc, char* argv[])
 {
     /* local variable */
-    clock_t startTime;
     int p, P, tag, n;
+    double start_time, end_time, elapsed_time;
+    
     tag = 42;
     MPI_Status status;
 
@@ -180,18 +223,22 @@ int main(int argc, char* argv[])
         
     int matrix_size[2];
     vector<double> flatten_list;
+    string image_path = argv[1];
+    
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+    start_time = MPI_Wtime();
+    
 
     // Master processor reads image
     if (p==0) {
-        clock_t startTime = clock(); // Master processor keeps the time
-
-        vector<vector<double>> mat = getMatrix("images/mat_files/index.csv");
+        // cout << image_path << endl;
+        vector<vector<double>> mat = getMatrix(image_path);
 
         int N = (int) mat.size(); 
         int M = (int) mat[0].size();
         matrix_size[0] = N;
         matrix_size[1] = M;
-        cout << "N: " << N <<", M: " << M << endl;
         // Flatten the vector to a array object.
         flatten_list.resize(M * N);
         for (int i = 0; i < N; i++) {
@@ -217,20 +264,7 @@ int main(int argc, char* argv[])
 
     }
     sendcnts[P - 1] = W * H;
-
-    if (p==0) {
-        // cout << "p:" << p << " hej" << endl;
-        for (int i = 0; i < sendcnts.size(); i++) {
-            cout << sendcnts[i] << ", ";
-        }
-        cout << endl;
-        for (int i = 0; i < sendcnts.size(); i++) {
-            cout << displs[i] << ", ";
-        }            
-        cout << endl;
-    }
     vector<double> local_flattened_list(sendcnts[p]);
-
 
     // Do the scatter stuff now
     MPI_Scatterv(flatten_list.data(), sendcnts.data(), displs.data(), MPI_DOUBLE, 
@@ -240,14 +274,7 @@ int main(int argc, char* argv[])
     flatten_list.clear();
 
     H = H + (p < res ? 1 : 0);
-    cout << "p: " << p << ", H: " << H << ", W: " << W << " flattened vec: " <<  local_flattened_list.size() << endl;
-    // cout << "p" << p << ": " << local_flattened_list[0] << ", " << local_flattened_list[1] << endl;
     vector<vector<double>> local_mat = reshape(local_flattened_list, H, W);
-    if (p==0){
-        // printMatrix(local_vector);
-        // cout << "local_vector.size: " << local_vector.size() << ", ";
-        // cout << "local_vector[0].size: " << local_vector[0].size() << endl; 
-    }
 
     int W_mag = W - 2;
     int H_mag = H + (p==0 || p==P-1 ? 1 : 0);
@@ -256,6 +283,7 @@ int main(int argc, char* argv[])
     vector<vector<double>> mat_temp(3 , vector<double> (3, 0)); // Create a 3x3 matrix with zeros  
     int j, k;
     double s;
+
     // Sending downwards and receiving from upwards
     for (int i = 0; i < W-2; i++) {         
         // First iteration, send an receive 3 elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
@@ -268,13 +296,6 @@ int main(int argc, char* argv[])
                 }
             }
         }
-        // } else if (i!=0 && p!=0) {
-        //     for (j = 0; j < 3; j ++) {
-        //         for (k = 0; k < 2; k++) {
-        //             mat_temp[j][k] = mat_temp[j][k+1];
-        //         }
-        //     }
-        // }
 
         if (i==0 && EVEN(p)) {
             if (p != P-1)
@@ -313,7 +334,7 @@ int main(int argc, char* argv[])
                 MPI_Send(local_mat[H-1].data() + 2 + i, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
         }
 
-        mag_top[i] = sobelTemp(mat_temp);
+        mag_top[i] = sobel3x3(mat_temp);
 
     }
 
@@ -368,7 +389,7 @@ int main(int argc, char* argv[])
                 MPI_Send(local_mat[0].data() + 2 + i, 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD); // sending up
         }
         
-        mag_down[i] = sobelTemp(mat_temp);
+        mag_down[i] = sobel3x3(mat_temp);
     }
 
     // Compute the mag for the local matrix
@@ -383,16 +404,6 @@ int main(int argc, char* argv[])
         mag[0] = mag_top;
         mag[H-1] = mag_down;        
     }
-    
-    if (p==0) {
-        for (int i = 0; i < mag.size(); i++) {
-            cout << "p" << p << ", i: " << i << ", W: " << mag[i].size() << endl; 
-        }        
-    }
-    // for (int i = 0; i < mag.size(); i++) {
-    //     cout << "p" << p << ", i: " << i << ", W: " << mag[i].size() << endl;
-    // }
-
 
     /* output for graphical representation */
     /* Instead of using gather (which may lead to excessive memory requirements
@@ -403,11 +414,14 @@ int main(int argc, char* argv[])
     2. The master sends a signal to process 1 to start writing.
     3. Process p waites for the signal from process p-1 to arrive.
     4. Process p writes its portion to disk. (append to file)
-    5. process p sends the signal to process p+1 (if it exists).
+    5. process p sends the signal to process p+1 (if it exists)
     */
     FILE *fp;
+    char filtered_path[1024] = "images/mat_filtered/filtered_"; 
+    strcat(filtered_path, basename(argv[1]));
+    
     if (p==0){ // Master process
-        fp = fopen("test.csv", "w");
+        fp = fopen(filtered_path, "w");
 		for (int i = 0; i < mag.size(); i++) {
             for (int j = 0; j < mag[i].size()-1; j++) {
 		        fprintf(fp, "%f,", mag[i][j]);
@@ -416,11 +430,11 @@ int main(int argc, char* argv[])
         }
         fclose(fp);		
         MPI_Send("hi", 2, MPI_CHAR, 1, tag, MPI_COMM_WORLD);
+
     } else {
-        
         char message[2]; // Nonesense message
         MPI_Recv(message, 2, MPI_CHAR, p-1, tag, MPI_COMM_WORLD, &status);
-        fp = fopen("test.csv", "a");
+        fp = fopen(filtered_path, "a");
 		for (int i = 0; i < mag.size(); i++) {
             for (int j = 0; j < mag[i].size()-1; j++) {
 		        fprintf(fp, "%f,", mag[i][j]);
@@ -435,24 +449,16 @@ int main(int argc, char* argv[])
         fclose(fp);
     }
     
-
-    if (p==0) {
-        clock_t secElapsed = (startTime - clock()) / 1000000;
-        // ofstream outfile("matrix.csv");
-        // for (int i = 0; i < mag.size(); i++) {
-        //     for (int j = 0; j < mag[i].size(); j++) {
-        //         outfile << mag[i][j];
-        //         if (j != mag[i].size() - 1) {
-        //             outfile << ",";
-        //         }
-        //     }
-        //     outfile << std::endl;
-        // }
-        // outfile.close();
-        cout << "Time elapsed: " << secElapsed << " seconds" << endl;
-    }
-    // printf("Process %d finished\n", p);
-    // /* That's it */
+    MPI_Barrier(MPI_COMM_WORLD);
+    end_time = MPI_Wtime();
     MPI_Finalize();
+
+    if (p==P-1) {
+        elapsed_time = end_time  - start_time;
+        printf("Process %d finished, took %f seconds.\n", p, elapsed_time);
+    } else {
+        printf("Process %d finished.\n", p);
+    }
+    // /* That's it */
     exit(0);
 }
