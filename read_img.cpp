@@ -17,7 +17,7 @@
 
 using namespace std;
 
-#define BUFFERSIZE 16384
+#define BUFFERSIZE 2797568
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define FILTER_HEIGHT 3
 #define FILTER_WIDTH 3
@@ -85,15 +85,13 @@ int printMatrix(vector<vector<double>> mat) {
     return 1;
 }
 
-double sobelHelper(vector<vector<double>> filter, vector<vector<double>> matrix, int start_row, int start_col) {
-    double sum = 0;
-    for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-            sum += filter[i][j] * matrix[i + start_row][j + start_col];
-        }
+int printVector(vector<double> vec) {
+    for (int i = 0; i < vec.size(); i++)
+    { // iterate over the rows of the 2D vector
+        cout << vec[i] << " "; // output the element at row i, column j
     }
-    return sum;
-    
+        cout << endl; // output a newline character after each row
+    return 1;
 }
 
 double sobelTemp(vector<vector<double>> matrix) {
@@ -112,17 +110,29 @@ double sobelTemp(vector<vector<double>> matrix) {
     return s;
 }
 
+double sobelHelper(vector<vector<double>> filter, vector<vector<double>> matrix, int start_row, int start_col) {
+    double sum = 0;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            sum += filter[i][j] * matrix[i + start_row][j + start_col];
+        }
+    }
+    return sum;
+    
+}
+
+
 vector<vector<double>> sobel(vector<vector<double>> mat) {
   
     int rows = mat.size(); int cols = mat[0].size(); 
-    vector<vector<double>> mag(rows, vector<double> (cols, 0));
+    vector<vector<double>> mag(rows, vector<double> (cols - 2, 0));
     printf("heigh: %lu, width: %lu\n", mag.size(), mag[0].size());
 
     for (int i = 0; i < rows - 2; i++) {
         for (int j = 0; j < cols - 2; j++) {
             double s1 = sobelHelper(Gx, mat, i, j);
             double s2 = sobelHelper(Gy, mat, i, j);
-            mag[i + 1][j + 1] = sqrt(pow(s1, 2) + pow(s2, 2));
+            mag[i + 1][j] = sqrt(pow(s1, 2) + pow(s2, 2)); // j+1?
         }   
     }
     return mag;
@@ -175,13 +185,13 @@ int main(int argc, char* argv[])
     if (p==0) {
         clock_t startTime = clock(); // Master processor keeps the time
 
-        vector<vector<double>> mat = getMatrix("images/mat_files/100075.jpg.csv");
+        vector<vector<double>> mat = getMatrix("images/mat_files/index.csv");
 
         int N = (int) mat.size(); 
         int M = (int) mat[0].size();
         matrix_size[0] = N;
         matrix_size[1] = M;
-
+        cout << "N: " << N <<", M: " << M << endl;
         // Flatten the vector to a array object.
         flatten_list.resize(M * N);
         for (int i = 0; i < N; i++) {
@@ -241,10 +251,12 @@ int main(int argc, char* argv[])
 
     int W_mag = W - 2;
     int H_mag = H + (p==0 || p==P-1 ? 1 : 0);
-    vector<vector<double>> mag(H_mag, vector<double> (W_mag - 2, 0)); 
+    vector<double> mag_top(W_mag); 
+    vector<double> mag_down(W_mag); 
     vector<vector<double>> mat_temp(3 , vector<double> (3, 0)); // Create a 3x3 matrix with zeros  
     int j, k;
-    // Sending downwards
+    double s;
+    // Sending downwards and receiving from upwards
     for (int i = 0; i < W-2; i++) {         
         // First iteration, send an receive 3 elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
         
@@ -299,30 +311,129 @@ int main(int argc, char* argv[])
  
             if (p != P-1)
                 MPI_Send(local_mat[H-1].data() + 2 + i, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
-
         }
+
+        mag_top[i] = sobelTemp(mat_temp);
+
+    }
+
+
+    // Sending upwards and receiving from downwards
+    for (int i = 0; i < W-2; i++) {         
+        // First iteration, send an receive 3 elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+        
+        // initialize the original temp_matrix
+        if (p!=P-1) {
+            for (j = 0; j < 2; j++) {
+                for (k = 0; k < 3; k++) {
+                    mat_temp[j][k] = local_mat[H-2+j][k+i];
+                }
+            }
+        }
+
+        if (i==0 && EVEN(p)) {
+            if (p != 0)
+                MPI_Send(local_mat[0].data(), 3, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD); // sending up
+            
+            if (p != P-1)
+                MPI_Recv(mat_temp[2].data(), 3, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status); // receiving from down
+
+        } else if (i==0 && ODD(p)) {
+            if (p != P-1)
+                MPI_Recv(mat_temp[2].data(), 3, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status); // receive from down
+
+            if (p != 0)
+                MPI_Send(local_mat[0].data(), 3, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD); // sending up
+        
+        } else if (i!=0 && EVEN(p)) {
+            // Shift the last row one step to the left
+            for (k = 0; k < 2; k++)
+                mat_temp[2][k] = mat_temp[2][k+1];
+            
+            if (p != 0)
+                MPI_Send(local_mat[0].data() + 2 + i, 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD); // sending up
+
+            if (p != P-1)
+                MPI_Recv(mat_temp[2].data() + 2, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status); // receiving from down
+            
+        } else if (p!=0 && ODD(p)) {
+            // Shift the last row one step to the left
+            for (k = 0; k < 2; k++)
+                mat_temp[2][k] = mat_temp[2][k+1];
+                
+            if (p != P-1)
+                MPI_Recv(mat_temp[2].data() + 2, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD, &status); // receive from down
+ 
+            if (p != 0)
+                MPI_Send(local_mat[0].data() + 2 + i, 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD); // sending up
+        }
+        
+        mag_down[i] = sobelTemp(mat_temp);
+    }
+
+    // Compute the mag for the local matrix
+    vector<vector<double>> mag = sobel(local_mat);
+
+    // Add the top and the bottom mag to the total mag
+    if (p==0) {
+        mag[H-1] = mag_down; // The top processor/stripe do not have a mag_top
+    } else if (p==P-1) {
+        mag[0] = mag_top; // The top processor/stripe do not have a mag_down
+    } else {
+        mag[0] = mag_top;
+        mag[H-1] = mag_down;        
     }
     
-    
-    if (p==7) {
-        printMatrix(mat_temp);
+    if (p==0) {
+        for (int i = 0; i < mag.size(); i++) {
+            cout << "p" << p << ", i: " << i << ", W: " << mag[i].size() << endl; 
+        }        
     }
-    
-    // if (p==0 || p==P-1) {
-    //     vector<vector<double>> mag(H - (p==0 || p==P-1 ? 1 : 0), vector<double> (W - 2, 0)); 
-    // } else {
-    //     vector<vector<double>> mag(H, vector<double> (W - 2, 0)); 
+    // for (int i = 0; i < mag.size(); i++) {
+    //     cout << "p" << p << ", i: " << i << ", W: " << mag[i].size() << endl;
     // }
 
 
-
-    // for (int i = 0; i < rows - 2; i++) {
-    //     for (int j = 0; j < cols - 2; j++) {
-    //         double s1 = sobelHelper(Gx, mat, i, j);
-    //         double s2 = sobelHelper(Gy, mat, i, j);
-    //         mag[i + 1][j + 1] = sqrt(pow(s1, 2) + pow(s2, 2));
-    //     }   
-    // }
+    /* output for graphical representation */
+    /* Instead of using gather (which may lead to excessive memory requirements
+    on the master process) each process will write its own data portion. This
+    introduces a sequentialization: the hard disk can only write (efficiently)
+    sequentially. Therefore, we use the following strategy:
+    1. The master process writes its portion. (file creation)
+    2. The master sends a signal to process 1 to start writing.
+    3. Process p waites for the signal from process p-1 to arrive.
+    4. Process p writes its portion to disk. (append to file)
+    5. process p sends the signal to process p+1 (if it exists).
+    */
+    FILE *fp;
+    if (p==0){ // Master process
+        fp = fopen("test.csv", "w");
+		for (int i = 0; i < mag.size(); i++) {
+            for (int j = 0; j < mag[i].size()-1; j++) {
+		        fprintf(fp, "%f,", mag[i][j]);
+            }
+            fprintf(fp, "%f\n", mag[i][j+1]);
+        }
+        fclose(fp);		
+        MPI_Send("hi", 2, MPI_CHAR, 1, tag, MPI_COMM_WORLD);
+    } else {
+        
+        char message[2]; // Nonesense message
+        MPI_Recv(message, 2, MPI_CHAR, p-1, tag, MPI_COMM_WORLD, &status);
+        fp = fopen("test.csv", "a");
+		for (int i = 0; i < mag.size(); i++) {
+            for (int j = 0; j < mag[i].size()-1; j++) {
+		        fprintf(fp, "%f,", mag[i][j]);
+            }
+            fprintf(fp, "%f\n", mag[i][j+1]);
+            
+        }
+        // fprintf(fp, "\n");
+        if (p!=P-1) { // If it's not the last processor, keep sending the signals forward
+            MPI_Send(message, 2, MPI_CHAR, p+1, tag, MPI_COMM_WORLD);
+        }
+        fclose(fp);
+    }
     
 
     if (p==0) {
