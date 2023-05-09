@@ -229,6 +229,30 @@ int main(int argc, char* argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     start_time = MPI_Wtime();
     
+    /* In the case of only one processor */
+    if (P==1) {
+        char filtered_path[1024] = "images/mat_filtered/filtered_1p_"; 
+        strcat(filtered_path, basename(argv[1]));
+        vector<vector<double>> mat = getMatrix(image_path);
+        vector<vector<double>> mag = sobel(mat);
+
+        FILE *fp;
+        fp = fopen(filtered_path, "w");
+
+		for (int i = 0; i < mag.size(); i++) {
+            for (int j = 0; j < mag[i].size()-1; j++) {
+		        fprintf(fp, "%f,", mag[i][j]);
+            }
+            fprintf(fp, "%f\n", mag[i][mag[i].size()-1]);
+        }
+        fclose(fp);
+        end_time = MPI_Wtime();
+        elapsed_time = end_time  - start_time;
+        printf("Process %d finished. Took %f seconds.\n", p, elapsed_time);
+        MPI_Finalize();
+        exit(0);
+    }
+    
 
     // Master processor reads image
     if (p==0) {
