@@ -450,12 +450,18 @@ int main(int argc, char* argv[])
     }
     
     MPI_Barrier(MPI_COMM_WORLD);
-    end_time = MPI_Wtime();
+    elapsed_time =  MPI_Wtime() - start_time;
+    double maxtime, mintime, avgtime;
+    /* Inspired by https://stackoverflow.com/questions/5298739/mpi-global-execution-time */
+    MPI_Reduce(&elapsed_time, &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_time, &mintime, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_time, &avgtime, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
     MPI_Finalize();
 
-    if (p==P-1) {
+    if (p==0) {
         elapsed_time = end_time  - start_time;
-        printf("Process %d finished, took %f seconds.\n", p, elapsed_time);
+        printf("Process %d finished. Min time: %lf Max time: %lf Avg time: %lf\n", p, mintime, maxtime, avgtime / P);
     } else {
         printf("Process %d finished.\n", p);
     }
