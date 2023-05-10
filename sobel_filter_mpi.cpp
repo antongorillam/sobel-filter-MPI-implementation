@@ -130,6 +130,104 @@ double sobel3x3(vector<vector<double>> matrix) {
     return s;
 }
 
+vector<double> flattenMat(vector<vector<double>> mat) {
+    int H = mat.size(); int W = mat[0].size();
+    vector<double> vec;
+    for (const auto &row : mat) {
+        for (const auto &elem : row) {
+            vec.push_back(elem);
+        }
+    }
+    return vec;
+}
+
+ double sobelStarHelperX(vector<double> image, int width, int x, int y) {
+
+    double mag = 0.0; // this is your magnitude
+
+    int xn, yn, index;
+
+    xn = x - 1;
+    yn = y - 1;
+    index = xn + yn * width;
+    mag += image[index] * Gx[0][0];
+
+    xn = x;
+    index = xn + yn * width;
+    mag += image[index] * Gx[1][0];
+
+    xn = x + 1;
+    index = xn + yn * width;
+    mag += image[index] * Gx[2][0];
+
+    yn = y + 1;
+    index = xn + yn * width;
+    mag += image[index] * Gx[2][2];
+
+    xn = x;
+    index = xn + yn * width;
+    mag += image[index] * Gx[1][2];
+
+    xn = x - 1;
+    index = xn + yn * width;
+    mag += image[index] * Gx[0][2];
+    
+    return mag;
+}
+
+double sobelStarHelperY(vector<double> image, int width, int x, int y) {
+
+    double mag = 0.0; // this is your magnitude
+
+    int xn, yn, index;
+
+    xn = x - 1;
+    yn = y - 1;
+    index = xn + yn * width;
+    mag += image[index] * Gy[0][0];
+
+    yn = y;
+    index = xn + yn * width;
+    mag += image[index] * Gy[0][1];
+    
+    yn = y + 1;
+    index = xn + yn * width;
+    mag += image[index] * Gy[0][2];
+
+    xn = x + 1;
+    index = xn + yn * width;
+    mag += image[index] * Gy[2][2];
+
+    yn = y;
+    index = xn + yn * width;
+    mag += image[index] * Gy[2][1];
+    
+    yn = y - 1;
+    index = xn + yn * width;
+    mag += image[index] * Gy[2][0];
+    
+    return mag;
+}
+
+vector<vector<double>> sobelStar(vector<vector<double>> mat) {
+    vector<double> vec = flattenMat(mat);
+    int H = mat.size();
+    int W = mat[0].size();
+    vector<vector<double>> mag(H, vector<double> (W - 2, 0));
+
+    double s1, s2;
+    for (int h = 1; h < mat.size() - 1; h++) {
+        for (int w = 1; w < W - 1; w++) {
+            s1 = sobelStarHelperX(vec, W, w, h);
+            s2 = sobelStarHelperY(vec, W, w, h);
+            // cout << "s1: " << s1 << ", s2: " << s2 << endl;
+            mag[h][w] = sqrt(pow(s1, 2) + pow(s2, 2));
+            // cout << "mag[h][w]: " << mag[h][w] << endl;
+        }
+    }
+    return mag;
+}
+
 /**
  * Applies the Sobel operator to a 3x3 neighborhood of the input image matrix.
  * 
@@ -173,7 +271,7 @@ vector<vector<double>> sobel(vector<vector<double>> mat) {
             double s2 = sobelHelper(Gy, mat, i, j);
             // Compute the magnitude of the gradient at the current pixel.
             mag[i + 1][j] = sqrt(pow(s1, 2) + pow(s2, 2));
-        }   
+        }
     }
     // Return the matrix of gradient magnitudes.
     return mag;
@@ -211,7 +309,8 @@ int main(int argc, char* argv[])
 {
     /* local variable */
     int p, P, tag, n;
-    double start_time, end_time, elapsed_time;
+    double start_tot_time, end_tot_time, elapsed_tot_time;
+    double start_comm_time, end_comm_time, elapsed_comm_time;
     
     tag = 42;
     MPI_Status status;
@@ -226,15 +325,16 @@ int main(int argc, char* argv[])
     string image_path = argv[1];
     
     
-    MPI_Barrier(MPI_COMM_WORLD);
-    start_time = MPI_Wtime();
+    // MPI_Barrier(MPI_COMM_WORLD);
+    start_tot_time = MPI_Wtime();
+    start_comm_time = 0.0;
     
     /* In the case of only one processor */
     if (P==1) {
         char filtered_path[1024] = "images/mat_filtered/filtered_1p_"; 
         strcat(filtered_path, basename(argv[1]));
         vector<vector<double>> mat = getMatrix(image_path);
-        vector<vector<double>> mag = sobel(mat);
+        vector<vector<double>> mag = sobelStar(mat);
 
         FILE *fp;
         fp = fopen(filtered_path, "w");
@@ -246,9 +346,9 @@ int main(int argc, char* argv[])
             fprintf(fp, "%f\n", mag[i][mag[i].size()-1]);
         }
         fclose(fp);
-        end_time = MPI_Wtime();
-        elapsed_time = end_time  - start_time;
-        printf("Process %d finished. Took %f seconds.\n", p, elapsed_time);
+        end_tot_time = MPI_Wtime();
+        elapsed_tot_time = end_tot_time  - start_tot_time;
+        printf("Process %d finished. Took %f seconds.\n", p, elapsed_tot_time);
         MPI_Finalize();
         exit(0);
     }
@@ -281,11 +381,9 @@ int main(int argc, char* argv[])
     int H = (int) N/P;
     int res = N - P * H;
 
-
     for (int i = 0; i < P - 1; i++) {
         sendcnts[i] = W * (i < res ? H + 1 : H);
         displs[i+1] = displs[i] + sendcnts[i];
-
     }
     sendcnts[P - 1] = W * H;
     vector<double> local_flattened_list(sendcnts[p]);
@@ -293,7 +391,6 @@ int main(int argc, char* argv[])
     // Do the scatter stuff now
     MPI_Scatterv(flatten_list.data(), sendcnts.data(), displs.data(), MPI_DOUBLE, 
                 local_flattened_list.data(), sendcnts[p], MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
 
     flatten_list.clear();
 
@@ -306,12 +403,12 @@ int main(int argc, char* argv[])
     vector<double> mag_down(W_mag); 
     vector<vector<double>> mat_temp(3 , vector<double> (3, 0)); // Create a 3x3 matrix with zeros  
     int j, k;
-    double s;
 
     // Sending downwards and receiving from upwards
     for (int i = 0; i < W-2; i++) {         
         // First iteration, send an receive 3 elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
-        
+        start_comm_time = MPI_Wtime();
+
         // initialize the original temp_matrix
         if (p!=0) {
             for (j = 1; j < 3; j++) {
@@ -357,16 +454,15 @@ int main(int argc, char* argv[])
             if (p != P-1)
                 MPI_Send(local_mat[H-1].data() + 2 + i, 1, MPI_DOUBLE, p+1, tag, MPI_COMM_WORLD); // sending down
         }
-
+        elapsed_comm_time += MPI_Wtime() - start_comm_time;
         mag_top[i] = sobel3x3(mat_temp);
-
     }
-
 
     // Sending upwards and receiving from downwards
     for (int i = 0; i < W-2; i++) {         
         // First iteration, send an receive 3 elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
-        
+        start_comm_time = MPI_Wtime();
+
         // initialize the original temp_matrix
         if (p!=P-1) {
             for (j = 0; j < 2; j++) {
@@ -412,13 +508,13 @@ int main(int argc, char* argv[])
             if (p != 0)
                 MPI_Send(local_mat[0].data() + 2 + i, 1, MPI_DOUBLE, p-1, tag, MPI_COMM_WORLD); // sending up
         }
-        
+        elapsed_comm_time += MPI_Wtime() - start_comm_time;
         mag_down[i] = sobel3x3(mat_temp);
     }
 
     // Compute the mag for the local matrix
     vector<vector<double>> mag = sobel(local_mat);
-
+    
     // Add the top and the bottom mag to the total mag
     if (p==0) {
         mag[H-1] = mag_down; // The top processor/stripe do not have a mag_top
@@ -452,8 +548,10 @@ int main(int argc, char* argv[])
             }
             fprintf(fp, "%f\n", mag[i][j+1]);
         }
-        fclose(fp);		
+        fclose(fp);
+        start_comm_time = MPI_Wtime();
         MPI_Send("hi", 2, MPI_CHAR, 1, tag, MPI_COMM_WORLD);
+        elapsed_comm_time += MPI_Wtime() - start_comm_time;
 
     } else {
         char message[2]; // Nonesense message
@@ -464,28 +562,43 @@ int main(int argc, char* argv[])
 		        fprintf(fp, "%f,", mag[i][j]);
             }
             fprintf(fp, "%f\n", mag[i][j+1]);
-            
         }
-        // fprintf(fp, "\n");
         if (p!=P-1) { // If it's not the last processor, keep sending the signals forward
+            start_comm_time = MPI_Wtime();
             MPI_Send(message, 2, MPI_CHAR, p+1, tag, MPI_COMM_WORLD);
+            elapsed_comm_time += MPI_Wtime() - start_comm_time;
         }
         fclose(fp);
     }
     
-    MPI_Barrier(MPI_COMM_WORLD);
-    elapsed_time =  MPI_Wtime() - start_time;
-    double maxtime, mintime, avgtime;
+    // MPI_Barrier(MPI_COMM_WORLD);
+    elapsed_tot_time =  MPI_Wtime() - start_tot_time;
+    double elapsed_comp_time = elapsed_tot_time - elapsed_comm_time;
+
+    double max_time, min_time, tot_time;
+    double max_comm_time, min_comm_time, tot_comm_time;
+    double max_comp_time, min_comp_time, tot_comp_time;
+
     /* Inspired by https://stackoverflow.com/questions/5298739/mpi-global-execution-time */
-    MPI_Reduce(&elapsed_time, &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_time, &mintime, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_time, &avgtime, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_tot_time, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_tot_time, &min_time, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_tot_time, &tot_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    MPI_Reduce(&elapsed_comm_time, &max_comm_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_comm_time, &min_comm_time, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_comm_time, &tot_comm_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    MPI_Reduce(&elapsed_comp_time, &max_comp_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_comp_time, &min_comp_time, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&elapsed_comp_time, &tot_comp_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     MPI_Finalize();
 
     if (p==0) {
-        elapsed_time = end_time  - start_time;
-        printf("Process %d finished. Min time: %lf Max time: %lf Avg time: %lf\n", p, mintime, maxtime, avgtime / P);
+        // printf("Process %d finished. Min time: %lf Max time: %lf Avg time: %lf, ", p, min_time, max_time, tot_time / P);
+        // printf("Min comm time: %lf Max comm time: %lf Avg comm time: %lf, ", max_comm_time, min_comm_time, tot_comm_time / P);
+        // printf("Min comp time: %lf Max comp time: %lf Avg comp time: %lf.\n", max_comp_time, min_comp_time, tot_comp_time / P);
+        printf("Process %d finished. Total time: %lf, communication time: %lf, computation time: %lf, ratio: %lf \n", p, max_time, max_comm_time, max_comp_time, max_comp_time / max_comm_time);
     } else {
         printf("Process %d finished.\n", p);
     }
