@@ -141,9 +141,19 @@ vector<double> flattenMat(vector<vector<double>> mat) {
     return vec;
 }
 
- double sobelStarHelperX(vector<double> image, int width, int x, int y) {
+/**
+ * Helper funtion for sobelStar() calculates the magnitude of the gradient of an image at a given pixel using the vertical Sobel operator.
+ * 
+ * @param image The 1D array of doubles representing the image.
+ * @param x The x coordinate of the pixel.
+ * @param y The y coordinate of the pixel.
+ * @param width The width of the image.
+ * @param Gy The 3x3 kernel to use for vertical gradient approximation.
+ * @return The magnitude of the gradient of the image at the given pixel.
+ */
+double sobelStarHelperX(vector<double> image, int width, int x, int y) {
 
-    double mag = 0.0; // this is your magnitude
+    double mag = 0.0; // this your magnitude
 
     int xn, yn, index;
 
@@ -175,6 +185,16 @@ vector<double> flattenMat(vector<vector<double>> mat) {
     return mag;
 }
 
+/**
+ * Helper funtion for sobelStar() calculates the magnitude of the gradient of an image at a given pixel using the horizontal Sobel operator.
+ * 
+ * @param image The 1D array of doubles representing the image.
+ * @param x The x coordinate of the pixel.
+ * @param y The y coordinate of the pixel.
+ * @param width The width of the image.
+ * @param Gy The 3x3 kernel to use for horizontal gradient approximation.
+ * @return The magnitude of the gradient of the image at the given pixel.
+ */
 double sobelStarHelperY(vector<double> image, int width, int x, int y) {
 
     double mag = 0.0; // this is your magnitude
@@ -209,8 +229,14 @@ double sobelStarHelperY(vector<double> image, int width, int x, int y) {
     return mag;
 }
 
+/**
+ * Applies the best sequential Sobel edge detection algorithm to the given 2D matrix of doubles.
+ * 
+ * @param mat The 2D matrix of doubles to apply Sobel edge detection on.
+ * @return A new 2D matrix of doubles containing the magnitude of the edges detected.
+ */
 vector<vector<double>> sobelStar(vector<vector<double>> mat) {
-    vector<double> vec = flattenMat(mat);
+    vector<double> vec = flattenMat(mat); // Flattens the matrix
     int H = mat.size();
     int W = mat[0].size();
     vector<vector<double>> mag(H, vector<double> (W - 2, 0));
@@ -220,9 +246,7 @@ vector<vector<double>> sobelStar(vector<vector<double>> mat) {
         for (int w = 1; w < W - 1; w++) {
             s1 = sobelStarHelperX(vec, W, w, h);
             s2 = sobelStarHelperY(vec, W, w, h);
-            // cout << "s1: " << s1 << ", s2: " << s2 << endl;
             mag[h][w] = sqrt(pow(s1, 2) + pow(s2, 2));
-            // cout << "mag[h][w]: " << mag[h][w] << endl;
         }
     }
     return mag;
@@ -305,13 +329,13 @@ vector<vector<double>> reshape(vector<double> flat_vector, int rows, int cols) {
     return vector_2d;
 }
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     /* local variable */
     int p, P, tag, n;
     double start_tot_time, end_tot_time, elapsed_tot_time;
     double start_comm_time, end_comm_time, elapsed_comm_time;
-    
+    double start_startup_time, end_startup_time, elapsed_startup_time;
+
     tag = 42;
     MPI_Status status;
 
@@ -335,13 +359,17 @@ int main(int argc, char* argv[])
         strcat(filtered_path, basename(argv[1]));
         vector<vector<double>> mat = getMatrix(image_path);
         vector<vector<double>> mag = sobelStar(mat);
-
+        // printf("hej \n");
         FILE *fp;
         fp = fopen(filtered_path, "w");
-
+        int cnt = 0; int total_runs = mag.size() * mag[0].size(); 
 		for (int i = 0; i < mag.size(); i++) {
+            // cout << "Run " << cnt << "/" << total_runs << "" << endl;
+            // printf("Run %d/%d, %f percent finished...\n", cnt, total_runs, (double) cnt/total_runs * 100);
+            fflush(stdout);
             for (int j = 0; j < mag[i].size()-1; j++) {
 		        fprintf(fp, "%f,", mag[i][j]);
+                cnt++;
             }
             fprintf(fp, "%f\n", mag[i][mag[i].size()-1]);
         }
@@ -353,7 +381,6 @@ int main(int argc, char* argv[])
         exit(0);
     }
     
-
     // Master processor reads image
     if (p==0) {
         // cout << image_path << endl;
@@ -374,31 +401,45 @@ int main(int argc, char* argv[])
     MPI_Bcast(&matrix_size, 2, MPI_INT, 0, MPI_COMM_WORLD);
     int N = matrix_size[0]; int M = matrix_size[1];
 
+    // Initialize vectors to hold the send counts and displacements for each process
     vector<int> sendcnts(P);
     vector<int> displs(P);
+
+    // Set the displacement of the root process to zero
     displs[0] = 0; 
+
+    // Calculate the width and height of the image
     int W = M;
     int H = (int) N/P;
+    // Calculate the remainder of N/P
     int res = N - P * H;
 
+    start_startup_time = MPI_Wtime();
+    // Calculate the send counts and displacements for each process except the root process
     for (int i = 0; i < P - 1; i++) {
         sendcnts[i] = W * (i < res ? H + 1 : H);
         displs[i+1] = displs[i] + sendcnts[i];
     }
+
+    // Calculate the send counts and displacements for each process except the root process
     sendcnts[P - 1] = W * H;
+
+    // Initialize a new vector to hold the received elements
     vector<double> local_flattened_list(sendcnts[p]);
 
-    // Do the scatter stuff now
+    // Scatter the flattened list using MPI_Scatterv
     MPI_Scatterv(flatten_list.data(), sendcnts.data(), displs.data(), MPI_DOUBLE, 
                 local_flattened_list.data(), sendcnts[p], MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
+    elapsed_startup_time = MPI_Wtime() - start_startup_time;
+
     flatten_list.clear();
 
-    H = H + (p < res ? 1 : 0);
+    H = H + (p < res ? 1 : 0); // Handles the residuals
     vector<vector<double>> local_mat = reshape(local_flattened_list, H, W);
 
     int W_mag = W - 2;
-    int H_mag = H + (p==0 || p==P-1 ? 1 : 0);
+    int H_mag = H + (p==0 || p==P-1 ? 1 : 0); // Handles the residuals
     vector<double> mag_top(W_mag); 
     vector<double> mag_down(W_mag); 
     vector<vector<double>> mat_temp(3 , vector<double> (3, 0)); // Create a 3x3 matrix with zeros  
@@ -573,24 +614,22 @@ int main(int argc, char* argv[])
     
     // MPI_Barrier(MPI_COMM_WORLD);
     elapsed_tot_time =  MPI_Wtime() - start_tot_time;
+    elapsed_comm_time += elapsed_startup_time;
     double elapsed_comp_time = elapsed_tot_time - elapsed_comm_time;
 
     double max_time, min_time, tot_time;
     double max_comm_time, min_comm_time, tot_comm_time;
     double max_comp_time, min_comp_time, tot_comp_time;
+    double max_startup_time, min_startup_time, tot_startup_time;
 
     /* Inspired by https://stackoverflow.com/questions/5298739/mpi-global-execution-time */
     MPI_Reduce(&elapsed_tot_time, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_tot_time, &min_time, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_tot_time, &tot_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     MPI_Reduce(&elapsed_comm_time, &max_comm_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_comm_time, &min_comm_time, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_comm_time, &tot_comm_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     MPI_Reduce(&elapsed_comp_time, &max_comp_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_comp_time, &min_comp_time, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&elapsed_comp_time, &tot_comp_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    MPI_Reduce(&elapsed_startup_time, &max_startup_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
     MPI_Finalize();
 
@@ -598,7 +637,7 @@ int main(int argc, char* argv[])
         // printf("Process %d finished. Min time: %lf Max time: %lf Avg time: %lf, ", p, min_time, max_time, tot_time / P);
         // printf("Min comm time: %lf Max comm time: %lf Avg comm time: %lf, ", max_comm_time, min_comm_time, tot_comm_time / P);
         // printf("Min comp time: %lf Max comp time: %lf Avg comp time: %lf.\n", max_comp_time, min_comp_time, tot_comp_time / P);
-        printf("Process %d finished. Total time: %lf, communication time: %lf, computation time: %lf, ratio: %lf \n", p, max_time, max_comm_time, max_comp_time, max_comp_time / max_comm_time);
+        printf("Process %d finished. Total time: %lf, communication time: %lf, computation time: %lf, starup time: %lf \n", p, max_time, max_comm_time, max_comp_time, max_startup_time);
     } else {
         printf("Process %d finished.\n", p);
     }
