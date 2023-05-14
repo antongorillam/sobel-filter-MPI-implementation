@@ -13,7 +13,7 @@ python3 jpeg-to-matrix --convert_dir images/custom --save_dir .
 """Convert JPEG images to grayscale matrices and save them in CSV format.
 
 Usage:
-python3 jpeg-to-matrix --convert_dir images/custom --save_dir .
+python3 jpeg-to-matrix.py --convert_dir images/custom --save_dir .
 
 Args:
 --convert_dir (str): The directory to convert images from.
