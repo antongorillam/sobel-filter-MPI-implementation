@@ -39,5 +39,14 @@ normalized_data = ((image_filtered - image_filtered.min()) * (1/(image_filtered.
 img = Image.fromarray(normalized_data)
 
 img.save("output.png")
-
 ```
+
+Otherwise, see the jupyter notebook [read_sobel_mat.ipynb](https://github.com/antongorillam/sobel-filter-MPI-implementation/blob/master/read_sobel_mat.ipynb).
+
+## Results
+
+Results from the filtering:
+
+![alt text](images/train/8049.jpg) ![alt text](images/filtered/8049_gray.png) ![alt text](images/filtered/8049_filtered.png)
+
+![alt text](images/custom/index.jpeg) ![alt text](images/filtered/image_gray.png) ![alt text](images/filtered/index_filtered.png)
